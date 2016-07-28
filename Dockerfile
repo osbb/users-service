@@ -8,4 +8,4 @@ COPY . /app/
 
 RUN npm install --production
 
-CMD node module.js
+CMD npm start
