@@ -1,11 +1,11 @@
 import seneca from 'seneca';
 import { MongoClient } from 'mongodb';
 
+import { findPlugin } from './plugins/find';
+
 const mongoHost = process.env.MONGO_PORT_27017_TCP_ADDR;
 const mongoPort = process.env.MONGO_PORT_27017_TCP_PORT;
 const mongoConnection = MongoClient.connect(`mongodb://${mongoHost}:${mongoPort}`);
-
-import { findPlugin } from './plugins/find';
 
 seneca()
   .client({
