@@ -1,4 +1,4 @@
-# Build
-```
-docker build -t osbb/users-service . --no-cache
-```
+Users Service
+=============
+
+Check out project's main repository [here](https://github.com/osbb/users-service) for more information. 
