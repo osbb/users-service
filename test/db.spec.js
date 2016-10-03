@@ -1,6 +1,6 @@
 import chai from 'chai';
 import { MongoClient, ObjectId } from 'mongodb';
-import * as Users from '../users';
+import * as Users from '../db';
 
 chai.should();
 
