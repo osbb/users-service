@@ -1,112 +1,66 @@
-import amqp from 'amqplib';
-import { MongoClient, ObjectId } from 'mongodb';
+import { getRabbitConnection } from './rabbit-connection';
+import { getMongoConnection } from './mongo-connection';
 import winston from 'winston';
+import * as Users from './users';
 
-const rabbitmqUrl = process.env.RABBITMQ_URL || 'amqp://localhost:5672';
-const mongoUrl = process.env.MONGO_URL || 'mongodb://localhost:27017';
-const connection = MongoClient.connect(mongoUrl); // connection promise
-const usersCollectionPromise = connection.then(db => db.collection('users'));
-
-function loadUsers() {
-  return usersCollectionPromise
-    .then(c => c.find({}).toArray());
+function sendResponseToMsg(ch, msg, data) {
+  return ch.sendToQueue(
+    msg.properties.replyTo,
+    new Buffer(JSON.stringify(data)),
+    { correlationId: msg.properties.correlationId }
+  );
 }
 
-function updateUser(user) {
-  const { title, answer } = user;
-
-  return usersCollectionPromise
-    .then(c => c.updateOne({ _id: ObjectId(user._id) }, { $set: { title, answer } }))
-    .then(() => usersCollectionPromise
-      .then(c => c.findOne({ _id: ObjectId(user._id) }, {}))
-    );
-}
-
-function createUser(user) {
-  const { title, answer } = user;
-
-  return usersCollectionPromise
-    .then(c => c.insertOne({ title, answer }, {}))
-    .then(res => usersCollectionPromise
-      .then(c => c.findOne({ _id: ObjectId(res.insertedId) }, {}))
-    );
-}
-
-const connectToRabbitMQ = new Promise(resolve => {
-  function openConnection() {
-    winston.info('Connecting to RabbitMQ...');
-    amqp.connect(rabbitmqUrl)
-      .then(conn => {
-        winston.info('Connected!');
-        resolve(conn);
-      })
-      .catch(() => {
-        winston.info('Connection failure. Retry in 5 sec.');
-        setTimeout(() => {
-          openConnection();
-        }, 5000);
-      });
-  }
-  openConnection();
-});
-
-connectToRabbitMQ
-  .then(conn => conn.createChannel())
-  .then(ch => {
+Promise
+// wait for connection to RabbitMQ and MongoDB
+  .all([getRabbitConnection(), getMongoConnection()])
+  // create channel rabbit
+  .then(([conn, db]) => Promise.all([conn.createChannel(), db]))
+  .then(([ch, db]) => {
+    // create topic
     ch.assertExchange('events', 'topic', { durable: true });
+    // create queue
     ch.assertQueue('users-service', { durable: true })
       .then(q => {
+        // fetch by one message from queue
         ch.prefetch(1);
+        // bind queue to topic
         ch.bindQueue(q.queue, 'events', 'users.*');
-
+        // listen to new messages
         ch.consume(q.queue, msg => {
           let data;
 
           try {
+            // messages always should be JSONs
             data = JSON.parse(msg.content.toString());
           } catch (err) {
+            // log error and exit
             winston.error(err, msg.content.toString());
             return;
           }
 
+          // map a routing key with actual logic
           switch (msg.fields.routingKey) {
             case 'users.load':
-              loadUsers(ch, data)
-                .then(users => {
-                  ch.sendToQueue(
-                    msg.properties.replyTo,
-                    new Buffer(JSON.stringify(users)),
-                    { correlationId: msg.properties.correlationId }
-                  );
-                  ch.ack(msg);
-                });
+              Users.load(db) // logic call
+                .then(users => sendResponseToMsg(ch, msg, users)) // send response to queue
+                .then(() => ch.ack(msg)); // notify queue message was processed
               break;
             case 'users.update':
-              updateUser(data)
-                .then(user => {
-                  ch.sendToQueue(
-                    msg.properties.replyTo,
-                    new Buffer(JSON.stringify(user)),
-                    { correlationId: msg.properties.correlationId }
-                  );
-                  ch.ack(msg);
-                });
+              Users.update(db, data) // logic call
+                .then(user => sendResponseToMsg(ch, msg, user)) // send response to queue
+                .then(() => ch.ack(msg)); // notify queue message was processed
               break;
             case 'users.create':
-              createUser(data)
-                .then(user => {
-                  ch.sendToQueue(
-                    msg.properties.replyTo,
-                    new Buffer(JSON.stringify(user)),
-                    { correlationId: msg.properties.correlationId }
-                  );
-                  ch.ack(msg);
-                });
+              Users.create(db, data) // logic call
+                .then(user => sendResponseToMsg(ch, msg, user)) // send response to queue
+                .then(() => ch.ack(msg)); // notify queue message was processed
               break;
             default:
+              // if we can't process this message, we should send it back to queue
               ch.nack(msg);
               return;
           }
-        }, { noAck: false });
+        });
       });
   });
