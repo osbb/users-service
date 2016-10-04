@@ -56,6 +56,11 @@ Promise
                 .then(user => sendResponseToMsg(ch, msg, user)) // send response to queue
                 .then(() => ch.ack(msg)); // notify queue message was processed
               break;
+            case 'users.delete':
+              Users.remove(db, data) // logic call
+                .then(user => sendResponseToMsg(ch, msg, user)) // send response to queue
+                .then(() => ch.ack(msg)); // notify queue message was processed
+              break;
             default:
               // if we can't process this message, we should send it back to queue
               ch.nack(msg);
